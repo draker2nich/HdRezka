@@ -1,6 +1,5 @@
 # -*- coding: utf-8 -*-
 import requests
-from bs4 import BeautifulSoup
 import base64
 from itertools import product
 from urlparse import urlparse
@@ -8,8 +7,9 @@ import time
 import re
 
 from ._compat import cached_property
+from .session_pool import get_session
 from .stream import HdRezkaStream
-from .types import BeautifulSoupCustom
+from .types import BeautifulSoupCustom, make_soup
 from .types import (TVSeries, Movie)
 from .types import (Film, Series, Cartoon, Anime)
 from .types import (HdRezkaFormat, HdRezkaCategory)
@@ -19,9 +19,13 @@ from .types import (default_translators_priority, default_translators_non_priori
 from .errors import (LoginRequiredError, LoginFailed, FetchFailed, CaptchaError, HTTP)
 
 
+# Таймаут по умолчанию на ВСЕ сетевые запросы. Без него зависшее зеркало
+# вешает фоновый поток Enigma2 навсегда, а polling-таймер крутится впустую —
+# для пользователя это выглядит как "плагин намертво повис".
+DEFAULT_TIMEOUT = 20
+
+
 # ── Предвычисленный набор "мусорных" base64-кодов ────────────────────────────
-# Раньше пересоздавался на КАЖДЫЙ getStream() через itertools.product (~30 комбо
-# + base64). На STi7111 это заметный оверхед. Считаем один раз при импорте.
 def _build_trash_codes():
 	trash_list = ["@", "#", "!", "^", "$"]
 	codes = []
@@ -33,7 +37,10 @@ def _build_trash_codes():
 
 _TRASH_CODES = _build_trash_codes()
 
-# Скомпилированный один раз regex для удаления HTML-тегов
+# Один проход regex вместо 30 последовательных .replace() по длинной строке.
+_TRASH_RE = re.compile("|".join(re.escape(c) for c in _TRASH_CODES))
+
+# Скомпилированные один раз regex
 _HTML_TAG_RE = re.compile(r'<[^>]*>')
 _DIGITS_RE = re.compile(r'\d+')
 
@@ -54,20 +61,13 @@ class HdRezkaApi(object):
 		self._translators_priority = translators_priority or default_translators_priority
 		self._translators_non_priority = translators_non_priority or default_translators_non_priority
 
-		# Переиспользуемая сессia: keep-alive экономит TLS-handshake на каждый запрос.
-		# Можно передать общую сессию извне (webserver), иначе создаём свою.
+		# По умолчанию берём ОБЩИЙ пул сессий (keep-alive, без лишних TLS).
+		# Внешний session по-прежнему можно передать явно.
 		if session is None:
-			session = requests.Session()
-			session.headers.update(self.HEADERS)
-			session.cookies.update(self.cookies)
-			try:
-				session.verify = False
-				requests.packages.urllib3.disable_warnings()
-			except Exception:
-				pass
+			session = get_session()
 		self.session = session
 
-		# Ленивый кэш переводов для seriesInfo (грузим перевод только когда нужен)
+		# Ленивый кэш переводов для seriesInfo
 		self._series_info_cache = {}
 
 	def __str__(self): return 'HdRezka("%s")' % self.name
@@ -78,12 +78,14 @@ class HdRezkaApi(object):
 		kw.setdefault("headers", self.HEADERS)
 		kw.setdefault("proxies", self.proxy)
 		kw.setdefault("cookies", self.cookies)
+		kw.setdefault("timeout", DEFAULT_TIMEOUT)
 		return self.session.get(url, **kw)
 
 	def _post(self, url, **kw):
 		kw.setdefault("headers", self.HEADERS)
 		kw.setdefault("proxies", self.proxy)
 		kw.setdefault("cookies", self.cookies)
+		kw.setdefault("timeout", DEFAULT_TIMEOUT)
 		return self.session.post(url, **kw)
 
 	@property
@@ -135,7 +137,7 @@ class HdRezkaApi(object):
 
 	@cached_property
 	def soup(self):
-		s = BeautifulSoupCustom(self.page.content, 'html.parser')
+		s = BeautifulSoupCustom(self.page.content)
 		if s.title.text == "Sign In": raise LoginRequiredError()
 		if s.title.text == "Verify": raise CaptchaError()
 		return s
@@ -276,8 +278,7 @@ class HdRezkaApi(object):
 	def clearTrash(data):
 		arr = data.replace("#h", "").split("//_//")
 		trashString = ''.join(arr)
-		for code in _TRASH_CODES:
-			trashString = trashString.replace(code, '')
+		trashString = _TRASH_RE.sub('', trashString)
 		try:
 			finalString = base64.b64decode(trashString + "==")
 			return finalString.decode("utf-8")
@@ -298,8 +299,8 @@ class HdRezkaApi(object):
 
 	@staticmethod
 	def getEpisodes(s, e):
-		seasons = BeautifulSoup(s, 'html.parser')
-		episodes = BeautifulSoup(e, 'html.parser')
+		seasons = make_soup(s)
+		episodes = make_soup(e)
 
 		seasons_ = {}
 		for season in seasons.findAll(class_="b-simple_season__item"):
@@ -318,10 +319,6 @@ class HdRezkaApi(object):
 
 	# ── Ленивая загрузка эпизодов отдельного перевода ────────────────────────
 	def _fetch_translator_series(self, tr_id):
-		"""Грузит сезоны/эпизоды ОДНОГО перевода. Кэшируется по tr_id.
-		Раньше seriesInfo дёргал get_cdn_series по разу на КАЖДЫЙ перевод
-		сразу — для веб-ремоута, который показывает один, это лишние N-1
-		сетевых запроса на медленном железе."""
 		if tr_id in self._series_info_cache:
 			return self._series_info_cache[tr_id]
 		tr_val = self.translators[tr_id]
@@ -407,7 +404,7 @@ class HdRezkaApi(object):
 				for i in arr:
 					temp = i.split("[")[1].split("]")
 					quality = strip_html(temp[0])
-					links = filter(lambda x: x.endswith(".mp4"), temp[1].split(" or "))
+					links = [x for x in temp[1].split(" or ") if x.endswith(".mp4")]
 					for video in links:
 						stream.append(quality, video)
 				return stream

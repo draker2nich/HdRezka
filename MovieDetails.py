@@ -1,5 +1,6 @@
 # -*- coding: utf-8 -*-
 import threading
+import re
 
 from Screens.Screen import Screen
 from Components.ActionMap import ActionMap
@@ -10,6 +11,13 @@ from Components.MultiContent import MultiContentEntryText
 from Screens.MessageBox import MessageBox
 
 from .config import HDREZKA_ORIGIN
+
+# Скомпилирован один раз, а не на каждый вызов quality_key.
+_QNUM_RE = re.compile(r'\d+')
+
+# Интервал опроса фонового потока. 150 мс — компромисс между отзывчивостью
+# и нагрузкой (опрос пустого флага практически бесплатен).
+_POLL_MS = 150
 
 
 def _u(s):
@@ -91,14 +99,20 @@ class HdRezkaMovieDetails(_BaseScreen):
 		except AttributeError:
 			self._poll.callback.append(self._checkLoaded)
 
+		# Прерываем фоновый поток при закрытии
+		self.onClose.append(self._onClose)
 		self.onLayoutFinish.append(self._start)
+
+	def _onClose(self):
+		self._poll.stop()
+		self._loaded = True
 
 	def _start(self):
 		self.setStatus("Загрузка информации...")
 		t = threading.Thread(target=self._worker)
 		t.daemon = True
 		t.start()
-		self._poll.start(400, False)
+		self._poll.start(_POLL_MS, False)
 
 	def _worker(self):
 		try:
@@ -192,20 +206,24 @@ class HdRezkaSeasonsScreen(_BaseScreen):
 		except AttributeError:
 			self._poll.callback.append(self._checkLoaded)
 
+		self.onClose.append(self._onClose)
 		self.onLayoutFinish.append(self._start)
+
+	def _onClose(self):
+		self._poll.stop()
+		self._loaded = True
 
 	def _start(self):
 		self.setStatus("Загрузка сезонов...")
 		t = threading.Thread(target=self._worker)
 		t.daemon = True
 		t.start()
-		self._poll.start(400, False)
+		self._poll.start(_POLL_MS, False)
 
 	def _worker(self):
 		try:
 			tr_id = self.translator["id"]
-			# Перевод уже выбран — грузим эпизоды ТОЛЬКО для него,
-			# а не по всем переводам сразу (seriesInfo).
+			# Перевод уже выбран — грузим эпизоды ТОЛЬКО для него.
 			try:
 				data = self.rezka.seriesInfoFor(tr_id)
 			except Exception:
@@ -263,14 +281,19 @@ class HdRezkaEpisodesScreen(_BaseScreen):
 		except AttributeError:
 			self._poll.callback.append(self._checkLoaded)
 
+		self.onClose.append(self._onClose)
 		self.onLayoutFinish.append(self._start)
+
+	def _onClose(self):
+		self._poll.stop()
+		self._loaded = True
 
 	def _start(self):
 		self.setStatus("Загрузка эпизодов...")
 		t = threading.Thread(target=self._worker)
 		t.daemon = True
 		t.start()
-		self._poll.start(400, False)
+		self._poll.start(_POLL_MS, False)
 
 	def _worker(self):
 		try:
@@ -357,14 +380,19 @@ class HdRezkaQualityScreen(_BaseScreen):
 		except AttributeError:
 			self._poll.callback.append(self._checkLoaded)
 
+		self.onClose.append(self._onClose)
 		self.onLayoutFinish.append(self._start)
+
+	def _onClose(self):
+		self._poll.stop()
+		self._loaded = True
 
 	def _start(self):
 		self.setStatus("Получение ссылок...")
 		t = threading.Thread(target=self._worker)
 		t.daemon = True
 		t.start()
-		self._poll.start(400, False)
+		self._poll.start(_POLL_MS, False)
 
 	def _worker(self):
 		try:
@@ -390,9 +418,8 @@ class HdRezkaQualityScreen(_BaseScreen):
 			self.setStatus("Ссылки не найдены")
 			return
 
-		import re as _re
 		def quality_key(q):
-			m = _re.search(r'\d+', q)
+			m = _QNUM_RE.search(q)
 			return int(m.group()) if m else 0
 
 		qualities = sorted(self._stream.videos.keys(), key=quality_key, reverse=True)

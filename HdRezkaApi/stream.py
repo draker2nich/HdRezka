@@ -58,8 +58,10 @@ class HdRezkaStreamSubtitles(object):
 				for key, value in self.subtitles.items():
 					if value['title'] == id:
 						return self.subtitles[key]['link']
-				if str(id).isdigit:
-					code = list(self.subtitles.keys())[id]
+				# BUGFIX: было `str(id).isdigit` (ссылка на метод, всегда True).
+				# Должно быть `str(id).isdigit()` — реальная проверка.
+				if str(id).isdigit():
+					code = list(self.subtitles.keys())[int(id)]
 					return self.subtitles[code]['link']
 				raise ValueError('Subtitles "%s" is not defined' % id)
 			else:

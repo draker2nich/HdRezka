@@ -2,6 +2,7 @@
 from urlparse import urlparse
 from .api import HdRezkaApi
 from .search import HdRezkaSearch
+from .session_pool import get_session
 from .types import default_cookies, default_headers
 from .types import default_translators_priority, default_translators_non_priority
 
@@ -44,7 +45,8 @@ class HdRezkaSession(object):
 
 	def login(self, email, password, **kwargs):
 		if not self.origin: raise ValueError("For login origin is required")
-		rezka = HdRezkaApi(self.origin, headers=self.HEADERS, proxy=self.proxy)
+		rezka = HdRezkaApi(self.origin, headers=self.HEADERS, proxy=self.proxy,
+			session=get_session())
 		if rezka.login(email=email, password=password, **kwargs):
 			self.cookies = dict(self.cookies, **rezka.cookies)
 			return True
@@ -67,4 +69,5 @@ class HdRezkaSession(object):
 
 	def search(self, query, find_all=False):
 		if not self.origin: raise ValueError("For search origin is required")
-		return HdRezkaSearch(self.origin, proxy=self.proxy, headers=self.HEADERS, cookies=self.cookies)(query, find_all=find_all)
+		return HdRezkaSearch(self.origin, proxy=self.proxy, headers=self.HEADERS,
+			cookies=self.cookies)(query, find_all=find_all)

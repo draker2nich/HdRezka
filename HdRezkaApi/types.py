@@ -2,7 +2,28 @@
 from bs4 import BeautifulSoup
 
 
+# ── Выбор парсера один раз на весь плагин ────────────────────────────────────
+# lxml на STi7111 в разы быстрее чистого html.parser. Если он есть в образе —
+# используем его автоматически, иначе тихо откатываемся на html.parser.
+try:
+	import lxml  # noqa: F401
+	PARSER = "lxml"
+except ImportError:
+	PARSER = "html.parser"
+
+
+def make_soup(markup):
+	"""Единая точка создания BeautifulSoup с выбранным парсером."""
+	return BeautifulSoup(markup, PARSER)
+
+
 class BeautifulSoupCustom(BeautifulSoup):
+	def __init__(self, markup="", *args, **kwargs):
+		# По умолчанию используем выбранный парсер, но не ломаем явные вызовы.
+		if not args and "features" not in kwargs:
+			kwargs["features"] = PARSER
+		super(BeautifulSoupCustom, self).__init__(markup, **kwargs)
+
 	def __repr__(self): return "<HTMLDocument>"
 
 

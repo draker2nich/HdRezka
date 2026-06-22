@@ -1,23 +1,13 @@
 # -*- coding: utf-8 -*-
 """
 webserver.py — HTTP + UDP broadcast сервер для управления с телефона.
-
-Запускается вместе с плагином. Телефон открывает страницу (встроена в сервер) —
-страница слушает UDP broadcast и автоматически находит ресивер.
-
-Оптимизации против исходной версии:
-  * состояние просмотра привязано к URL фильма, а не к одному глобальному
-    синглтону → два клиента/повторные тапы не затирают друг друга;
-  * /info для сериала грузит ТОЛЬКО первый перевод (а не все N), что убирает
-    основной лаг на медленном железе;
-  * LRU-кэш загруженных HdRezkaApi объектов;
-  * общий requests.Session под капотом (см. api.py).
 """
 
 import threading
 import socket
 import json
 import time
+import re
 
 try:
     from BaseHTTPServer import BaseHTTPRequestHandler, HTTPServer
@@ -33,14 +23,18 @@ from .config import HDREZKA_ORIGIN
 
 HTTP_PORT  = 8888
 UDP_PORT   = 8889
-BROADCAST_INTERVAL = 5   # секунд между рассылками
+BROADCAST_INTERVAL = 10  # секунд между рассылками (было 5 — лишний трафик)
 MOVIE_CACHE_MAX = 6      # сколько загруженных фильмов держим в памяти
+
+# Скомпилирован один раз для сортировки качеств.
+_QNUM_RE = re.compile(r'\d+')
 
 # ── глобальное состояние ─────────────────────────────────────────────────────
 _lock = threading.Lock()
 _play_cb = None                 # callback(url, title) → запускает плеер
 _movie_cache = {}               # canon_url -> HdRezkaApi
 _movie_order = []               # порядок для LRU-вытеснения
+_load_locks = {}                # canon_url -> Lock (защита от двойной загрузки)
 
 
 def set_play_callback(cb):
@@ -70,6 +64,18 @@ def _cache_put(url, rezka):
             _movie_cache.pop(old, None)
 
 
+def _get_load_lock(url):
+    """Отдельный лок на КОНКРЕТНЫЙ url — чтобы два параллельных запроса
+    (например /info и /seasons почти одновременно) не грузили один фильм дважды."""
+    key = _canon(url)
+    with _lock:
+        lk = _load_locks.get(key)
+        if lk is None:
+            lk = threading.Lock()
+            _load_locks[key] = lk
+        return lk
+
+
 # ── вспомогательные функции ──────────────────────────────────────────────────
 
 def _get_local_ip():
@@ -94,16 +100,22 @@ def _search(query):
 
 
 def _load_movie(url):
-    """Грузит фильм с кэшированием по URL."""
+    """Грузит фильм с кэшированием по URL и защитой от двойной загрузки."""
     cached = _cache_get(url)
     if cached is not None:
         return cached
-    from .HdRezkaApi.api import HdRezkaApi
-    r = HdRezkaApi(url)
-    if not r.ok:
-        raise Exception(str(r.exception))
-    _cache_put(url, r)
-    return r
+    lk = _get_load_lock(url)
+    with lk:
+        # повторная проверка под локом — другой поток мог уже загрузить
+        cached = _cache_get(url)
+        if cached is not None:
+            return cached
+        from .HdRezkaApi.api import HdRezkaApi
+        r = HdRezkaApi(url)
+        if not r.ok:
+            raise Exception(str(r.exception))
+        _cache_put(url, r)
+        return r
 
 
 # ── HTML страница ─────────────────────────────────────────────────────────────
@@ -272,7 +284,6 @@ function selectTranslator(trId, trName) {
     show('seasons');
     document.getElementById('seasons-title').textContent = trName;
     document.getElementById('seasons-list').innerHTML = '';
-    // сезоны/эпизоды грузим ЛЕНИВО для выбранного перевода
     if (_seasonsCache[trId]) { renderSeasons(_seasonsCache[trId]); return; }
     document.getElementById('seasons-spinner').style.display='block';
     api('/seasons', {url:_currentUrl, translator:trId}, function(data){
@@ -448,9 +459,6 @@ class Handler(BaseHTTPRequestHandler):
             except Exception:
                 pass
 
-            # ВАЖНО: сезоны больше НЕ грузим здесь — это делалось по всем
-            # переводам сразу и было главным тормозом /info для сериалов.
-            # Сезоны подтянет /seasons лениво для выбранного перевода.
             self._json_ok({
                 "title":       r.name or "",
                 "year":        year,
@@ -497,9 +505,8 @@ class Handler(BaseHTTPRequestHandler):
             r = _load_movie(url)
             stream = r.getStream(season=season, episode=episode, translation=tr_id)
 
-            import re as _re
             def qkey(q):
-                m = _re.search(r'\d+', q)
+                m = _QNUM_RE.search(q)
                 return int(m.group()) if m else 0
 
             videos = {}
@@ -552,7 +559,11 @@ class UDPBroadcaster(threading.Thread):
                 sock.sendto(msg.encode("utf-8"), ("<broadcast>", UDP_PORT))
             except Exception:
                 pass
-            time.sleep(BROADCAST_INTERVAL)
+            # дробим сон, чтобы stop() срабатывал быстро, а не ждал весь интервал
+            slept = 0
+            while slept < BROADCAST_INTERVAL and not self._stop:
+                time.sleep(1)
+                slept += 1
         sock.close()
 
     def stop(self):
@@ -567,6 +578,8 @@ _broadcaster = None
 def start(play_callback):
     """Вызывается из plugin.py при старте Enigma2."""
     global _server, _broadcaster
+    # на всякий случай гасим прошлый инстанс (повторный autostart)
+    stop()
     set_play_callback(play_callback)
 
     _server = ThreadingHTTPServer(("0.0.0.0", HTTP_PORT), Handler)
@@ -584,5 +597,10 @@ def stop():
     if _server:
         try: _server.shutdown()
         except Exception: pass
+        try: _server.server_close()   # освобождаем сокет, иначе bind упадёт при рестарте
+        except Exception: pass
+        _server = None
     if _broadcaster:
-        _broadcaster.stop()
+        try: _broadcaster.stop()
+        except Exception: pass
+        _broadcaster = None

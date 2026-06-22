@@ -1,6 +1,5 @@
 # -*- coding: utf-8 -*-
 import threading
-import requests
 
 from Screens.Screen import Screen
 from Components.ActionMap import ActionMap
@@ -10,12 +9,6 @@ from enigma import eListboxPythonMultiContent, gFont, RT_HALIGN_LEFT, eTimer
 from Components.MultiContent import MultiContentEntryText
 
 from .config import HDREZKA_ORIGIN
-
-# Убираем варнинги SSL на старом железе
-try:
-	requests.packages.urllib3.disable_warnings()
-except Exception:
-	pass
 
 CATEGORY_URLS = {
 	"films":     "/films/",
@@ -88,7 +81,6 @@ class HdRezkaResultsList(Screen):
 		except AttributeError:
 			self.poll_timer.callback.append(self.checkLoaded)
 
-		# Останавливаем таймер при закрытии экрана
 		self.onClose.append(self._onClose)
 		self.onLayoutFinish.append(self.startLoading)
 
@@ -101,7 +93,8 @@ class HdRezkaResultsList(Screen):
 		thread = threading.Thread(target=self._loadWorker)
 		thread.daemon = True
 		thread.start()
-		self.poll_timer.start(300, False)
+		# 150 мс вместо 300 — заметно живее реакция при готовности данных
+		self.poll_timer.start(150, False)
 
 	def _loadWorker(self):
 		try:
@@ -117,15 +110,14 @@ class HdRezkaResultsList(Screen):
 			self._loaded = True
 
 	def _fetchCategoryPage(self, category_key):
-		from bs4 import BeautifulSoup
+		# Общий пул сессий (keep-alive) + общий парсер вместо локальных.
+		from .HdRezkaApi.session_pool import get_session
+		from .HdRezkaApi.types import make_soup
 		path = CATEGORY_URLS.get(category_key, "/")
 		url  = HDREZKA_ORIGIN.rstrip("/") + path
-		headers = {
-			"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/81.0.4044.138 Safari/537.36"
-		}
-		r = requests.get(url, headers=headers, timeout=15, verify=False)
+		r = get_session().get(url, timeout=20)
 		r.raise_for_status()
-		soup  = BeautifulSoup(r.content, "html.parser")
+		soup  = make_soup(r.content)
 		items = soup.find_all(class_="b-content__inline_item")
 		results = []
 		for item in items:

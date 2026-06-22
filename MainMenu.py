@@ -55,12 +55,11 @@ class HdRezkaMainMenu(Screen):
 
 		self["actions"] = ActionMap(["OkCancelActions", "ColorActions"], {
 			"ok":     self.onSelect,
-			"cancel": self.onCancel,  # не закрываем корневой экран
+			"cancel": self.onCancel,
 			"red":    self.onCancel,
 		}, -1)
 
 	def onCancel(self):
-		# Корневой экран — выход заблокирован, чтобы не уйти в пустое меню E2
 		pass
 
 	def onSelect(self):

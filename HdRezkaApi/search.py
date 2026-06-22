@@ -1,25 +1,14 @@
 # -*- coding: utf-8 -*-
 import requests
-from bs4 import BeautifulSoup
 from urlparse import urlparse
 from ._compat import cached_property
-from .types import default_cookies, default_headers
+from .session_pool import get_session
+from .types import default_cookies, default_headers, make_soup
 from .types import (HdRezkaCategory, Film, Series, Cartoon, Anime)
 from .errors import HTTP, LoginRequiredError, CaptchaError
 
-try:
-	from functools import lru_cache
-except ImportError:
-	# Python 2 не имеет functools.lru_cache (появился в 3.2)
-	# Пытаемся взять backport, если установлен в системе (пакет python-functools32)
-	try:
-		from functools32 import lru_cache
-	except ImportError:
-		# fallback: простой no-op декоратор без кэширования
-		def lru_cache(maxsize=None):
-			def decorator(func):
-				return func
-			return decorator
+
+DEFAULT_TIMEOUT = 20
 
 
 try:
@@ -38,22 +27,18 @@ class HdRezkaSearch(object):
 		self.proxy = proxy
 		self.cookies = dict(default_cookies, **cookies)
 		self.HEADERS = dict(default_headers, **headers)
-		if session is None:
-			session = requests.Session()
-			session.headers.update(self.HEADERS)
-			try:
-				session.verify = False
-			except Exception:
-				pass
-		self.session = session
+		# Общий пул сессий вместо новой сессии на каждый поиск.
+		self.session = session if session is not None else get_session()
 
 	def __call__(self, query, find_all=False):
 		return self.advanced_search(query) if find_all else self.fast_search(query)
 
 	def fast_search(self, query):
-		r = self.session.post('%s/engine/ajax/search.php' % self.origin, data={'q': query}, headers=self.HEADERS, proxies=self.proxy, cookies=self.cookies)
+		r = self.session.post('%s/engine/ajax/search.php' % self.origin,
+			data={'q': query}, headers=self.HEADERS, proxies=self.proxy,
+			cookies=self.cookies, timeout=DEFAULT_TIMEOUT)
 		if r.ok:
-			soup = BeautifulSoup(r.content, 'html.parser')
+			soup = make_soup(r.content)
 			results = []
 			for item in soup.select('.b-search__section_list li'):
 				title = item.find('span', class_='enty').get_text().strip()
@@ -65,16 +50,18 @@ class HdRezkaSearch(object):
 		raise HTTP(r.status_code, r.reason)
 
 	def advanced_search(self, query):
-		return SearchResult(self.origin, query, proxy=self.proxy, cookies=self.cookies, headers=self.HEADERS)
+		return SearchResult(self.origin, query, proxy=self.proxy,
+			cookies=self.cookies, headers=self.HEADERS, session=self.session)
 
 
 class SearchResult(object):
-	def __init__(self, origin, query, proxy=None, headers=None, cookies=None):
+	def __init__(self, origin, query, proxy=None, headers=None, cookies=None, session=None):
 		self.origin = origin
 		self.query = query
 		self.proxy = proxy
 		self.headers = headers
 		self.cookies = cookies
+		self.session = session if session is not None else get_session()
 		self._page_cache = {}
 	def __str__(self): return "SearchResult(%s)" % self.query
 	def __len__(self): return len(self.all_pages)
@@ -109,10 +96,13 @@ class SearchResult(object):
 			'q': self.query,
 			'page': page
 		}
-		r = requests.get('%s/search/' % self.origin, params=data, headers=self.headers, proxies=self.proxy, cookies=self.cookies)
+		# Используем общий пул (keep-alive) вместо голого requests.get.
+		r = self.session.get('%s/search/' % self.origin, params=data,
+			headers=self.headers, proxies=self.proxy, cookies=self.cookies,
+			timeout=DEFAULT_TIMEOUT)
 		result = None
 		if r.ok:
-			soup = BeautifulSoup(r.content, 'html.parser')
+			soup = make_soup(r.content)
 			if soup.title.text == "Sign In": raise LoginRequiredError()
 			if soup.title.text == "Verify": raise CaptchaError()
 			items = soup.find_all(class_='b-content__inline_item')
