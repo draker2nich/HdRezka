@@ -3,7 +3,6 @@ import requests
 import base64
 from itertools import product
 from urlparse import urlparse
-import time
 import re
 
 from ._compat import cached_property
@@ -11,12 +10,11 @@ from .session_pool import get_session
 from .stream import HdRezkaStream
 from .types import BeautifulSoupCustom, make_soup
 from .types import (TVSeries, Movie)
-from .types import (Film, Series, Cartoon, Anime)
-from .types import (HdRezkaFormat, HdRezkaCategory)
+from .types import HdRezkaFormat
 from .types import (HdRezkaRating, HdRezkaEmptyRating)
 from .types import default_cookies, default_headers
 from .types import (default_translators_priority, default_translators_non_priority)
-from .errors import (LoginRequiredError, LoginFailed, FetchFailed, CaptchaError, HTTP)
+from .errors import (LoginRequiredError, FetchFailed, CaptchaError, HTTP)
 from collections import OrderedDict
 
 
@@ -116,20 +114,6 @@ class HdRezkaApi(object):
 			try: self.soup
 			except Exception as e: return e
 
-	def login(self, email, password, raise_exception=True):
-		response = self._post("%s/ajax/login/" % self.origin,
-			data={"login_name": email, "login_password": password})
-		data = response.json()
-		if data['success']:
-			self.cookies = dict(self.cookies, **response.cookies.get_dict())
-			return True
-		if raise_exception: raise LoginFailed(data.get("message"))
-
-	@staticmethod
-	def make_cookies(user_id, password_hash):
-		"""Build cookies helper"""
-		return {"dle_user_id": str(user_id), "dle_password": password_hash}
-
 	@cached_property
 	def page(self):
 		r = self._get(self.url, allow_redirects=True)
@@ -162,30 +146,6 @@ class HdRezkaApi(object):
 			self.soup.find(class_="b-post__title").get_text().split("/")]
 
 	@cached_property
-	def origName(self):
-		return self.origNames[-1] if self.origNames else None
-
-	@cached_property
-	def origNames(self):
-		el = self.soup.find(class_="b-post__origtitle")
-		if el:
-			return [s.strip() for s in el.get_text().split("/")]
-		return []
-
-	@cached_property
-	def description(self):
-		el = self.soup.find(class_="b-post__description_text")
-		return el.get_text().strip() if el else ""
-
-	@cached_property
-	def thumbnail(self):
-		return self.soup.find(class_="b-sidecover").find('img').attrs['src']
-
-	@cached_property
-	def thumbnailHQ(self):
-		return self.soup.find(class_="b-sidecover").find('a').attrs['href']
-
-	@cached_property
 	def releaseYear(self):
 		el = self.soup.select_one('.b-content__main .b-post__info a[href*="/year/"]')
 		if el:
@@ -199,16 +159,6 @@ class HdRezkaApi(object):
 		if type_str == "video.tv_series": return TVSeries()
 		if type_str == "video.movie": return Movie()
 		return HdRezkaFormat(type_str)
-
-	@cached_property
-	def category(self):
-		uri = urlparse(self.url)
-		cat = uri.path.lstrip("/").split("/")[0]
-		if cat == 'films': return Film()
-		if cat == 'series': return Series()
-		if cat == 'cartoons': return Cartoon()
-		if cat == 'animation': return Anime()
-		return HdRezkaCategory(cat)
 
 	@cached_property
 	def rating(self):
@@ -274,13 +224,6 @@ class HdRezkaApi(object):
 			key=lambda item: prior.get(item[0], max_index)))
 		return sorted_translators
 
-	@cached_property
-	def translators_names(self):
-		result = {}
-		for k, v in self.translators.items():
-			result[v["name"]] = {"id": k, "premium": v["premium"]}
-		return result
-
 	@staticmethod
 	def clearTrash(data):
 		arr = data.replace("#h", "").split("//_//")
@@ -291,18 +234,6 @@ class HdRezkaApi(object):
 			return finalString.decode("utf-8")
 		except Exception:
 			return trashString
-
-	@cached_property
-	def otherParts(self):
-		parts = self.soup.find(class_="b-post__partcontent")
-		other = []
-		if parts:
-			for i in parts.findAll(class_="b-post__partcontent_item"):
-				if 'current' in i.attrs['class']:
-					other.append({i.find(class_="title").text: self.url})
-				else:
-					other.append({i.find(class_="title").text: i.attrs['data-url']})
-		return other
 
 	@staticmethod
 	def getEpisodes(s, e):
@@ -480,70 +411,3 @@ class HdRezkaApi(object):
 			return getStreamMovie(self, tr_id)
 		else:
 			raise TypeError("Undefined content type")
-
-	def getSeasonStreams(self, season, translation=None,
-		priority=None, non_priority=None,
-		ignore=False, progress=None
-	):
-		if not progress: progress = lambda cur, all: None
-		streams = {}
-
-		def get_episodes_by_translator(data):
-			result = {}
-			for item in data:
-				episode = item['episode']
-				for translation_item in item['translations']:
-					translator_id = translation_item['translator_id']
-					translator_name = translation_item['translator_name']
-					if translator_id not in result:
-						result[translator_id] = {'translator_name': translator_name, 'episodes': []}
-					result[translator_id]['episodes'].append(episode)
-			return result
-
-		def get_translator_id(translators):
-			if translation:
-				if str(translation).isdigit():
-					if int(translation) in translators.keys():
-						return int(translation)
-					else:
-						raise ValueError('Translation with code "%s" is not defined' % translation)
-				elif any(v['translator_name'] == translation for k, v in translators.items()):
-					return next((k for k, v in translators.items() if v['translator_name'] == translation), None)
-				else:
-					raise ValueError('Translation "%s" is not defined' % translation)
-			else:
-				return list(
-					self.sort_translators(translators, priority=priority, non_priority=non_priority).keys()
-				)[0]
-
-		episodes = next((s['episodes'] for s in self.episodesInfo if s['season'] == int(season)), None)
-		if not episodes: raise ValueError('Season "%s" is not found!' % season)
-
-		episodes_data = get_episodes_by_translator(episodes)
-		tr_id = get_translator_id(episodes_data)
-		series = episodes_data[tr_id]['episodes']
-		series_length = len(series)
-		progress(0, series_length)
-
-		def make_call(episode, retry=True):
-			try:
-				stream = self.getStream(season, episode, tr_id)
-				streams[episode] = stream
-				progress(len(streams), series_length)
-				return stream
-			except Exception as e:
-				if retry:
-					time.sleep(1)
-					if ignore:
-						return make_call(episode)
-					else:
-						return make_call(episode, retry=False)
-				if not ignore:
-					ex_name = e.__class__.__name__
-					ex_desc = e
-					print("%s > ep:%s: %s" % (ex_name, episode, ex_desc))
-					streams[episode] = None
-					progress(len(streams), series_length)
-
-		for episode in series:
-			yield episode, make_call(episode)

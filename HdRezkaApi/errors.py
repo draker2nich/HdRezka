@@ -2,9 +2,6 @@
 class LoginRequiredError(Exception):
 	def __init__(self): super(LoginRequiredError, self).__init__("Login is required to access this page.")
 
-class LoginFailed(Exception):
-	def __init__(self, msg): super(LoginFailed, self).__init__(msg)
-
 class FetchFailed(Exception):
 	def __init__(self): super(FetchFailed, self).__init__("Failed to fetch stream!")
 

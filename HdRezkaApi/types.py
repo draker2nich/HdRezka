@@ -60,33 +60,12 @@ class HdRezkaFormat(HdRezkaType):
 		super(HdRezkaFormat, self).__init__(name, "format")
 
 
-class HdRezkaCategory(HdRezkaType):
-	def __init__(self, name):
-		super(HdRezkaCategory, self).__init__(name, "category")
-
-
 class TVSeries(HdRezkaFormat):
 	def __init__(self): super(TVSeries, self).__init__("tv_series")
 
 
 class Movie(HdRezkaFormat):
 	def __init__(self): super(Movie, self).__init__("movie")
-
-
-class Film(HdRezkaCategory):
-	def __init__(self): super(Film, self).__init__("film")
-
-
-class Series(HdRezkaCategory):
-	def __init__(self): super(Series, self).__init__("series")
-
-
-class Cartoon(HdRezkaCategory):
-	def __init__(self): super(Cartoon, self).__init__("cartoon")
-
-
-class Anime(HdRezkaCategory):
-	def __init__(self): super(Anime, self).__init__("anime")
 
 
 class HdRezkaRating(object):

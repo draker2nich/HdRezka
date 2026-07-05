@@ -2,8 +2,8 @@
 """
 session_pool.py — единый общий requests.Session на весь плагин.
 
-Зачем: раньше HdRezkaApi, HdRezkaSearch, SearchResult и ResultsList создавали
-КАЖДЫЙ свою сессию. На STi7111 это означало новый TLS-handshake (сотни мс CPU)
+Зачем: раньше HdRezkaApi, HdRezkaSearch и ResultsList создавали КАЖДЫЙ свою
+сессию. На STi7111 это означало новый TLS-handshake (сотни мс CPU)
 на каждом шаге навигации поиск -> info -> seasons -> stream. Один общий пул с
 keep-alive переиспользует соединение к зеркалу.
 """

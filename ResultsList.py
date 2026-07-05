@@ -78,7 +78,7 @@ class HdRezkaResultsList(Screen, AsyncLoaderMixin):
 		if self.mode == "search":
 			from .HdRezkaApi.search import HdRezkaSearch
 			searcher = HdRezkaSearch(get_origin())
-			return searcher(self.query, find_all=False)
+			return searcher(self.query)
 		elif self.mode == "history":
 			from .history import list_history
 			return list_history()

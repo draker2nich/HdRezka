@@ -5,7 +5,6 @@ from .api import HdRezkaApi
 from .search import HdRezkaSearch
 from .session_pool import get_session, reset_session
 from .types import (TVSeries, Movie)
-from .types import (Film, Series, Cartoon, Anime)
-from .types import (HdRezkaFormat, HdRezkaCategory)
+from .types import HdRezkaFormat
 from .types import (HdRezkaRating, HdRezkaEmptyRating)
-from .errors import (LoginRequiredError, LoginFailed, FetchFailed, CaptchaError, HTTP)
+from .errors import (LoginRequiredError, FetchFailed, CaptchaError, HTTP)
