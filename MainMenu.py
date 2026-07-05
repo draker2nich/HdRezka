@@ -45,14 +45,14 @@ class HdRezkaMainMenu(Screen):
 		# домена происходит лениво в фоновых потоках при первом запросе.
 		self["title"] = Label("HDRezka — %s" % peek_origin())
 
+		# Новая концепция: каталог (категории/поиск-по-жанрам) переехал в
+		# Android-приложение, которое парсит HDRezka само и шлёт готовый URL
+		# на приставку (см. agent.py). На самой приставке остаётся только
+		# автономный fallback на случай, когда телефона нет под рукой:
+		# поиск по названию, продолжение просмотра и настройки.
 		self.menu_items = [
 			("search",    u"Поиск по названию"),
 			("continue",  u"Продолжить просмотр"),
-			("films",     u"Фильмы"),
-			("series",    u"Сериалы"),
-			("cartoons",  u"Мультфильмы"),
-			("animation", u"Аниме"),
-			("favorites", u"Избранное"),
 			("settings",  u"Настройки"),
 		]
 
@@ -81,12 +81,8 @@ class HdRezkaMainMenu(Screen):
 			self.openSearch()
 		elif key == "settings":
 			self.openSettings()
-		elif key == "favorites":
-			self.openFavorites()
 		elif key == "continue":
 			self.openHistory()
-		else:
-			self.openCategory(key, title)
 
 	def openSearch(self):
 		from Screens.VirtualKeyBoard import VirtualKeyBoard
@@ -105,17 +101,9 @@ class HdRezkaMainMenu(Screen):
 		# Домен мог поменяться (принудительный или сброс кэша) -- обновим заголовок.
 		self["title"].setText("HDRezka — %s" % peek_origin())
 
-	def openFavorites(self):
-		from .ResultsList import HdRezkaResultsList
-		self.session.open(HdRezkaResultsList, mode="favorites", category=None, title=u"Избранное")
-
 	def openHistory(self):
 		from .ResultsList import HdRezkaResultsList
-		self.session.open(HdRezkaResultsList, mode="history", category=None, title=u"Продолжить просмотр")
-
-	def openCategory(self, category_key, title):
-		from .ResultsList import HdRezkaResultsList
-		self.session.open(HdRezkaResultsList, mode="category", category=category_key, title=title)
+		self.session.open(HdRezkaResultsList, mode="history", title=u"Продолжить просмотр")
 
 	def openResultsList(self, query):
 		from .ResultsList import HdRezkaResultsList

@@ -11,13 +11,6 @@ from .config import get_origin
 from .async_screen import AsyncLoaderMixin
 from .log import log_exception, exc_text
 
-CATEGORY_URLS = {
-	"films":     "/films/",
-	"series":    "/series/",
-	"cartoons":  "/cartoons/",
-	"animation": "/animation/",
-}
-
 
 def ResultEntryComponent(item):
 	title = item.get("title", "???")
@@ -53,14 +46,13 @@ class HdRezkaResultsList(Screen, AsyncLoaderMixin):
 	</screen>
 	"""
 
-	def __init__(self, session, mode, title, query=None, category=None):
+	def __init__(self, session, mode, title, query=None):
 		Screen.__init__(self, session)
 		self._initAsyncLoader()
 
 		self.session  = session
 		self.mode     = mode
 		self.query    = query
-		self.category = category
 		self.results  = []
 
 		if isinstance(title, unicode):
@@ -87,41 +79,11 @@ class HdRezkaResultsList(Screen, AsyncLoaderMixin):
 			from .HdRezkaApi.search import HdRezkaSearch
 			searcher = HdRezkaSearch(get_origin())
 			return searcher(self.query, find_all=False)
-		elif self.mode == "favorites":
-			from .favorites import list_favorites
-			return list_favorites()
 		elif self.mode == "history":
 			from .history import list_history
 			return list_history()
-		else:
-			return self._fetchCategoryPage(self.category)
-
-	def _fetchCategoryPage(self, category_key):
-		# Общий пул сессий (keep-alive) + общий парсер вместо локальных.
-		from .HdRezkaApi.session_pool import get_session
-		from .HdRezkaApi.types import make_soup
-		path = CATEGORY_URLS.get(category_key, "/")
-		url  = get_origin().rstrip("/") + path
-		r = get_session().get(url, timeout=20)
-		r.raise_for_status()
-		soup  = make_soup(r.content)
-		items = soup.find_all(class_="b-content__inline_item")
-		results = []
-		for item in items:
-			link = item.find(class_="b-content__inline_item-link")
-			if not link:
-				continue
-			a = link.find("a")
-			if not a:
-				continue
-			cover = item.find(class_="b-content__inline_item-cover")
-			img   = cover.find("img") if cover else None
-			results.append({
-				"title": a.text.strip(),
-				"url":   a.attrs.get("href", ""),
-				"image": img.attrs.get("src", "") if img else None,
-			})
-		return results
+		# Неизвестный режим — пустой результат, а не молчаливое падение.
+		return []
 
 	def _onLoaded(self, result, error):
 		if error:
@@ -136,9 +98,7 @@ class HdRezkaResultsList(Screen, AsyncLoaderMixin):
 		self.results = result or []
 
 		if not self.results:
-			if self.mode == "favorites":
-				empty_msg = u"Список избранного пуст"
-			elif self.mode == "history":
+			if self.mode == "history":
 				empty_msg = u"Вы ещё ничего не смотрели"
 			else:
 				empty_msg = u"Ничего не найдено"
