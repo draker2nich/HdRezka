@@ -13,11 +13,11 @@ import java.util.concurrent.TimeUnit
 object Mirrors {
 
     val MIRRORS = listOf(
+        "https://rezka-ua.pub",
         "https://hdrezka.ag",
         "https://rezka.ag",
         "https://hdrezka.me",
         "https://rezka-ua.tv",
-        "https://hdrezka.website",
     )
 
     @Volatile
@@ -75,11 +75,19 @@ object Mirrors {
                 .get().build()
             client.newCall(req).execute().use { resp ->
                 val body = resp.body?.string() ?: ""
-                val ok = resp.isSuccessful && (body.contains("b-content") ||
-                    body.contains("b-navigation") || body.contains("b-search"))
+                // Достижимо, если это реальный HDRezka ИЛИ анти-бот-заглушка
+                // (её мы пройдём через WebView) — главное, что домен живой.
+                val isRezka = body.contains("b-content") || body.contains("b-navigation") ||
+                    body.contains("b-search")
+                val isChallenge = body.contains("within.website") ||
+                    body.contains("Проверяем, что вы не бот") ||
+                    body.contains("anubis", ignoreCase = true) ||
+                    body.contains("ddos-guard", ignoreCase = true) ||
+                    body.contains("Just a moment", ignoreCase = true)
+                val ok = resp.isSuccessful && (isRezka || isChallenge)
                 android.util.Log.d(
                     Net.TAG,
-                    "probe ${normalize(origin)} -> ${resp.code}, len=${body.length}, ok=$ok"
+                    "probe ${normalize(origin)} -> ${resp.code}, len=${body.length}, rezka=$isRezka, challenge=$isChallenge"
                 )
                 ok
             }

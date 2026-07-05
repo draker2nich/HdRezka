@@ -11,6 +11,12 @@ import com.hdrezka.pult.core.Net
  * HDRezka не открывается (403/битый сертификат CDN).
  */
 class HdRezkaApp : Application(), ImageLoaderFactory {
+    override fun onCreate() {
+        super.onCreate()
+        // Нужен ChallengeSolver'у для скрытого WebView (обход Anubis).
+        Net.appContext = applicationContext
+    }
+
     override fun newImageLoader(): ImageLoader =
         ImageLoader.Builder(this)
             .okHttpClient(Net.client)

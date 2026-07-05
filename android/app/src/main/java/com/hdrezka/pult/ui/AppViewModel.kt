@@ -96,7 +96,9 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
     // ── загрузка контента (вызывается из экранов) ────────────────────────────────
     suspend fun search(query: String): List<CatalogItem> {
         val origin = Mirrors.resolve()
-        return HdRezkaSearch.fastSearch(origin, query)
+        // GET-страница поиска: проходит обход анти-бота через WebView и отдаёт
+        // карточки с обложками (в отличие от POST-автокомплита).
+        return HdRezkaSearch.searchPage(origin, query, 1)
     }
 
     suspend fun categoryFirstPage(path: String): List<CatalogItem> {
