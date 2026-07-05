@@ -80,7 +80,10 @@ object Net {
     }
 
     private fun baseRequest(url: String): Request.Builder =
-        Request.Builder().url(url).header("User-Agent", USER_AGENT)
+        Request.Builder().url(url)
+            .header("User-Agent", USER_AGENT)
+            .header("Accept", "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8")
+            .header("Accept-Language", "ru-RU,ru;q=0.9,en;q=0.8")
 
     /** GET → распарсенный Jsoup Document. Выполняется на IO-потоке. */
     suspend fun getDocument(url: String): Document = withContext(Dispatchers.IO) {

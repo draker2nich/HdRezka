@@ -104,6 +104,29 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
         return HdRezkaSearch.categoryPage(origin, path, 1)
     }
 
+    /** Лента каталога для главного экрана (раздел + сортировка). */
+    suspend fun catalog(path: String, filter: String): List<CatalogItem> {
+        val origin = Mirrors.resolve()
+        return HdRezkaSearch.catalog(origin, path, filter, 1)
+    }
+
+    /** Немедленно применить/сохранить принудительный домен. */
+    fun setForcedDomain(domain: String) {
+        prefs.forcedDomain = domain.trim()
+        Mirrors.applyForced(domain)
+    }
+
+    /** Проверка связи с HDRezka. Возвращает человекочитаемый результат. */
+    suspend fun testConnection(domain: String): String {
+        val d = domain.trim()
+        return if (d.isEmpty()) {
+            val o = Mirrors.resolve(forceRecheck = true)
+            if (Mirrors.probe(o)) "OK, авто-домен: $o" else "Авто-домен $o не отвечает"
+        } else {
+            if (Mirrors.probe(d)) "OK: $d отвечает" else "Не отвечает: $d"
+        }
+    }
+
     suspend fun loadDetails(url: String): HdRezkaApi {
         val fullUrl = if (url.startsWith("http")) url else Mirrors.resolve().trimEnd('/') + "/" + url.trimStart('/')
         val api = HdRezkaApi(fullUrl)

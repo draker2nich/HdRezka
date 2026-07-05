@@ -13,9 +13,11 @@ import java.util.concurrent.TimeUnit
 object Mirrors {
 
     val MIRRORS = listOf(
-        "https://rezka-ua.tv",
         "https://hdrezka.ag",
         "https://rezka.ag",
+        "https://hdrezka.me",
+        "https://rezka-ua.tv",
+        "https://hdrezka.website",
     )
 
     @Volatile
@@ -39,7 +41,12 @@ object Mirrors {
 
     fun resetCache() { resolved = null }
 
-    /** Находит рабочий домен (сеть). Кэширует результат. */
+    /**
+     * Находит рабочий домен (сеть). Кэширует результат.
+     * Проверяем GET'ом и наличием реального каталога (класс b-content), а не
+     * HEAD'ом: Cloudflare-заглушка отвечает 200/403 на HEAD и раньше ошибочно
+     * принималась за «рабочее зеркало», из-за чего каталог не парсился.
+     */
     suspend fun resolve(forceRecheck: Boolean = false): String = withContext(Dispatchers.IO) {
         val forced = normalize(forcedDomain)
         if (forced.isNotEmpty()) return@withContext forced
@@ -48,23 +55,38 @@ object Mirrors {
         if (cached != null && !forceRecheck) return@withContext cached
 
         for (origin in MIRRORS) {
-            try {
-                val client = Net.client.newBuilder()
-                    .callTimeout(5, TimeUnit.SECONDS).build()
-                val req = Request.Builder().url(origin).head()
-                    .header("User-Agent", Net.USER_AGENT).build()
-                client.newCall(req).execute().use { resp ->
-                    if (resp.code < 500) {
-                        resolved = origin
-                        return@withContext origin
-                    }
-                }
-            } catch (_: Exception) {
-                // пробуем следующее зеркало
+            if (probe(origin)) {
+                resolved = origin
+                return@withContext origin
             }
         }
         // ничего не ответило — отдаём первое, пусть конкретный запрос упадёт понятно
         resolved = MIRRORS[0]
         MIRRORS[0]
+    }
+
+    /** true, если зеркало отдаёт реальную страницу HDRezka (есть каталог). */
+    suspend fun probe(origin: String): Boolean = withContext(Dispatchers.IO) {
+        try {
+            val client = Net.client.newBuilder().callTimeout(8, TimeUnit.SECONDS).build()
+            val req = Request.Builder().url(normalize(origin))
+                .header("User-Agent", Net.USER_AGENT)
+                .header("Accept-Language", "ru-RU,ru;q=0.9")
+                .get().build()
+            client.newCall(req).execute().use { resp ->
+                if (!resp.isSuccessful) return@withContext false
+                val body = resp.body?.string() ?: return@withContext false
+                body.contains("b-content") || body.contains("b-navigation") ||
+                    body.contains("b-search")
+            }
+        } catch (_: Exception) {
+            false
+        }
+    }
+
+    /** Применить пользовательский домен немедленно (сброс кэша авто-резолва). */
+    fun applyForced(domain: String) {
+        forcedDomain = domain.trim()
+        resetCache()
     }
 }

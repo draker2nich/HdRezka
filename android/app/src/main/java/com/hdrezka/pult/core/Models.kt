@@ -10,6 +10,8 @@ data class CatalogItem(
     val rating: Double? = null,
     val image: String? = null,
     val category: String? = null,
+    val year: String? = null,
+    val info: String? = null,
 )
 
 /** Озвучка/перевод. */
