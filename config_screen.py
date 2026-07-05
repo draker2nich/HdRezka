@@ -1,6 +1,13 @@
 # -*- coding: utf-8 -*-
 from Screens.Screen import Screen
-from Screens.Setup import ConfigListScreen
+# ConfigListScreen канонически живёт в Components.ConfigList. На части образов
+# (в т.ч. OpenVision) его больше нет в Screens.Setup — оттуда импорт падал и
+# ронял ресивер при открытии настроек. Берём из правильного места, со старым
+# расположением как фолбэком.
+try:
+	from Components.ConfigList import ConfigListScreen
+except ImportError:
+	from Screens.Setup import ConfigListScreen
 from Components.ActionMap import ActionMap
 from Components.config import config, getConfigListEntry, configfile
 
