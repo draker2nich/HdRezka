@@ -22,5 +22,7 @@ sealed interface Screen {
         val translatorName: String,
         val season: Int?,
         val episode: Int?,
+        /** Секунда, с которой продолжить (из истории). null = с начала. */
+        val resumeSec: Int? = null,
     ) : Screen
 }

@@ -52,8 +52,16 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
     var scanning by mutableStateOf(false)
         private set
 
+    // Кэшируем клиента на пару host:port, чтобы пульт (опрос раз в секунду) не
+    // пересоздавал объект на каждый тик.
+    private var agentCache: Pair<String, AgentClient>? = null
     val agent: AgentClient?
-        get() = selectedDevice?.let { AgentClient(it.host, it.port) }
+        get() {
+            val d = selectedDevice ?: return null
+            val key = "${d.host}:${d.port}"
+            agentCache?.let { if (it.first == key) return it.second }
+            return AgentClient(d.host, d.port).also { agentCache = key to it }
+        }
 
     // ── текущая страница контента (переиспользуется между экранами) ──────────────
     var currentApi: HdRezkaApi? = null
@@ -62,6 +70,9 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
     // ── статус воспроизведения ───────────────────────────────────────────────────
     var status by mutableStateOf<PlaybackStatus?>(null)
     private var lastPlayedUrl: String? = null
+    // Секунда, на которую нужно перемотать, как только приставка реально начнёт
+    // играть (стрим готов — есть duration). Ставится при «Продолжить».
+    private var pendingResumeSec: Int? = null
 
     init {
         Mirrors.forcedDomain = prefs.forcedDomain
@@ -75,7 +86,10 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
         viewModelScope.launch {
             scanning = true
             devices = try {
-                Discovery.discover(prefs.selectedPort.takeIf { it in 1..65535 } ?: 8123)
+                Discovery.discover(
+                    getApplication<Application>(),
+                    prefs.selectedPort.takeIf { it in 1..65535 } ?: 8123,
+                )
             } catch (_: Exception) {
                 emptyList()
             }
@@ -93,23 +107,18 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
     fun selectManual(host: String, port: Int) =
         selectDevice(AgentDevice(host, host, port))
 
-    // ── загрузка контента (вызывается из экранов) ────────────────────────────────
-    suspend fun search(query: String): List<CatalogItem> {
+    // ── загрузка контента (вызывается из экранов, постранично) ────────────────────
+
+    /** Лента каталога (раздел + сортировка), конкретная страница — для бесконечной прокрутки. */
+    suspend fun catalogPage(path: String, filter: String, page: Int): List<CatalogItem> {
         val origin = Mirrors.resolve()
-        // GET-страница поиска: проходит обход анти-бота через WebView и отдаёт
-        // карточки с обложками (в отличие от POST-автокомплита).
-        return HdRezkaSearch.searchPage(origin, query, 1)
+        return HdRezkaSearch.catalog(origin, path, filter, page)
     }
 
-    suspend fun categoryFirstPage(path: String): List<CatalogItem> {
+    /** Страница результатов поиска (GET /search/): обходит анти-бот и отдаёт обложки. */
+    suspend fun searchResultsPage(query: String, page: Int): List<CatalogItem> {
         val origin = Mirrors.resolve()
-        return HdRezkaSearch.categoryPage(origin, path, 1)
-    }
-
-    /** Лента каталога для главного экрана (раздел + сортировка). */
-    suspend fun catalog(path: String, filter: String): List<CatalogItem> {
-        val origin = Mirrors.resolve()
-        return HdRezkaSearch.catalog(origin, path, filter, 1)
+        return HdRezkaSearch.searchPage(origin, query, page)
     }
 
     /** Немедленно применить/сохранить принудительный домен. */
@@ -179,6 +188,7 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
      */
     suspend fun cast(
         trId: Int, trName: String, season: Int?, episode: Int?, streamUrl: String,
+        resumeSec: Int? = null,
     ): String? {
         val api = currentApi ?: return "Страница не загружена"
         val ag = agent ?: return "Приставка не выбрана"
@@ -194,7 +204,9 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
         val res = ag.play(req)
         return if (res.isSuccess) {
             lastPlayedUrl = api.url
-            history.set(api.url, api.name, trId, trName, season, episode)
+            // Перемотка применится в pollStatus, когда стрим реально стартует.
+            pendingResumeSec = resumeSec?.takeIf { it > 0 }
+            history.set(api.url, api.name, trId, trName, season, episode, resumeSec)
             null
         } else {
             res.exceptionOrNull()?.message ?: "Не удалось запустить на приставке"
@@ -202,29 +214,35 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
     }
 
     // ── пульт ─────────────────────────────────────────────────────────────────────
-    fun refreshStatus() {
+
+    /** Один опрос состояния. Вызывается из цикла экрана пульта (без плодящихся корутин). */
+    suspend fun pollStatus() {
         val ag = agent ?: return
-        viewModelScope.launch {
-            val s = ag.status()
-            status = s
-            // синхронизируем позицию в историю для «продолжить»
-            val url = lastPlayedUrl
-            val pos = s?.position
-            if (url != null && pos != null && s.playing) {
-                history.updatePosition(url, pos)
-            }
+        val s = ag.status()
+        status = s
+        if (s == null) return
+
+        // Отложенная перемотка «продолжить»: ждём, пока стрим начнёт играть и
+        // появится длительность (иначе seekto вернёт 409 — стрим ещё не готов).
+        val resume = pendingResumeSec
+        if (resume != null && s.playing && (s.duration ?: 0) > 0) {
+            ag.control("seekto", resume)
+            pendingResumeSec = null
+        }
+
+        // Синхронизируем позицию в историю для «продолжить».
+        val url = lastPlayedUrl
+        val pos = s.position
+        if (url != null && pos != null && s.playing) {
+            history.updatePosition(url, pos)
         }
     }
+
+    /** Удалить запись из «Продолжить просмотр». */
+    fun deleteHistory(url: String) = history.remove(url)
 
     fun control(cmd: String, value: Int? = null) {
         val ag = agent ?: return
         viewModelScope.launch { ag.control(cmd, value) }
-    }
-
-    /** «Продолжить просмотр»: открыть карточку и сразу перейти к нужному месту. */
-    fun continueWatching(url: String, onLoaded: (HdRezkaApi) -> Unit) {
-        viewModelScope.launch {
-            runCatching { loadDetails(url) }.onSuccess(onLoaded)
-        }
     }
 }
