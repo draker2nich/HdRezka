@@ -150,9 +150,6 @@ class HdRezkaMovieDetails(_BaseScreen):
 		self.url   = url
 		self.rezka = None
 		self._progress = None
-		self["favActions"] = ActionMap(["ColorActions"], {
-			"yellow": self.toggleFavorite,
-		}, -1)
 		self["histActions"] = ActionMap(["ColorActions"], {
 			"blue": self.continueWatching,
 		}, -1)
@@ -170,7 +167,6 @@ class HdRezkaMovieDetails(_BaseScreen):
 		return rezka
 
 	def _buildTitle(self):
-		from .favorites import is_favorite
 		r = self.rezka
 		title = _u(r.name or u"—")
 		try:
@@ -179,18 +175,7 @@ class HdRezkaMovieDetails(_BaseScreen):
 				title = "%s (%s)" % (title, year)
 		except Exception:
 			pass
-		if is_favorite(self.url):
-			title = "* " + title
 		return title
-
-	def toggleFavorite(self):
-		if not self.rezka:
-			return
-		from .favorites import toggle_favorite
-		added = toggle_favorite(self.url, self.rezka.name or u"")
-		self.setStatus(u"Добавлено в избранное (ЖЁЛТАЯ ещё раз — убрать)" if added
-		               else u"Убрано из избранного")
-		self["title"].setText(self._buildTitle())
 
 	def continueWatching(self):
 		if not self.rezka or not self._progress:

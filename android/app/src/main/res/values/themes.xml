@@ -1,0 +1,8 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!-- Compose сам рисует Material3-тему; здесь нужен только безрамочный
+         фон-старта без ActionBar. -->
+    <style name="Theme.HdRezkaPult" parent="android:Theme.Material.NoActionBar">
+        <item name="android:windowBackground">@android:color/black</item>
+    </style>
+</resources>
