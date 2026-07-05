@@ -28,6 +28,8 @@ import javax.net.ssl.X509TrustManager
  */
 object Net {
 
+    const val TAG = "HdRezkaPult"
+
     const val USER_AGENT =
         "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 " +
             "(KHTML, like Gecko) Chrome/81.0.4044.138 Safari/537.36"
@@ -88,9 +90,14 @@ object Net {
     /** GET → распарсенный Jsoup Document. Выполняется на IO-потоке. */
     suspend fun getDocument(url: String): Document = withContext(Dispatchers.IO) {
         client.newCall(baseRequest(url).get().build()).execute().use { resp ->
-            if (!resp.isSuccessful) throw HttpException(resp.code, resp.message)
             val body = resp.body?.string() ?: ""
-            Jsoup.parse(body, url)
+            val doc = Jsoup.parse(body, url)
+            android.util.Log.d(
+                TAG,
+                "GET $url -> ${resp.code}, len=${body.length}, title='${doc.title()}'"
+            )
+            if (!resp.isSuccessful) throw HttpException(resp.code, resp.message)
+            doc
         }
     }
 

@@ -74,12 +74,17 @@ object Mirrors {
                 .header("Accept-Language", "ru-RU,ru;q=0.9")
                 .get().build()
             client.newCall(req).execute().use { resp ->
-                if (!resp.isSuccessful) return@withContext false
-                val body = resp.body?.string() ?: return@withContext false
-                body.contains("b-content") || body.contains("b-navigation") ||
-                    body.contains("b-search")
+                val body = resp.body?.string() ?: ""
+                val ok = resp.isSuccessful && (body.contains("b-content") ||
+                    body.contains("b-navigation") || body.contains("b-search"))
+                android.util.Log.d(
+                    Net.TAG,
+                    "probe ${normalize(origin)} -> ${resp.code}, len=${body.length}, ok=$ok"
+                )
+                ok
             }
-        } catch (_: Exception) {
+        } catch (e: Exception) {
+            android.util.Log.d(Net.TAG, "probe $origin -> исключение: ${e.message}")
             false
         }
     }

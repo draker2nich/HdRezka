@@ -90,6 +90,7 @@ object HdRezkaSearch {
                 )
             )
         }
+        android.util.Log.d(Net.TAG, "parseInlineItems: найдено ${out.size} карточек")
         return out
     }
 }
