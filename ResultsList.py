@@ -1,14 +1,15 @@
 # -*- coding: utf-8 -*-
-import threading
-
 from Screens.Screen import Screen
 from Components.ActionMap import ActionMap
 from Components.Label import Label
 from Components.MenuList import MenuList
-from enigma import eListboxPythonMultiContent, gFont, RT_HALIGN_LEFT, eTimer
+from enigma import eListboxPythonMultiContent, gFont, RT_HALIGN_LEFT
 from Components.MultiContent import MultiContentEntryText
+from Screens.MessageBox import MessageBox
 
-from .config import HDREZKA_ORIGIN
+from .config import get_origin
+from .async_screen import AsyncLoaderMixin
+from .log import log_exception, exc_text
 
 CATEGORY_URLS = {
 	"films":     "/films/",
@@ -43,7 +44,7 @@ class ResultsMenuList(MenuList):
 		self.l.setItemHeight(45)
 
 
-class HdRezkaResultsList(Screen):
+class HdRezkaResultsList(Screen, AsyncLoaderMixin):
 	skin = """
 	<screen name="HdRezkaResultsList" position="center,center" size="760,560" title="HDRezka">
 		<widget name="title"  position="10,10"  size="740,40"  font="Regular;26" halign="center" />
@@ -54,13 +55,13 @@ class HdRezkaResultsList(Screen):
 
 	def __init__(self, session, mode, title, query=None, category=None):
 		Screen.__init__(self, session)
+		self._initAsyncLoader()
+
 		self.session  = session
 		self.mode     = mode
 		self.query    = query
 		self.category = category
 		self.results  = []
-		self.error    = None
-		self._loaded  = False
 
 		if isinstance(title, unicode):
 			title = title.encode("utf-8")
@@ -75,46 +76,32 @@ class HdRezkaResultsList(Screen):
 			"red":    self.close,
 		}, -1)
 
-		self.poll_timer = eTimer()
-		try:
-			self.poll_timer_conn = self.poll_timer.timeout.connect(self.checkLoaded)
-		except AttributeError:
-			self.poll_timer.callback.append(self.checkLoaded)
-
-		self.onClose.append(self._onClose)
 		self.onLayoutFinish.append(self.startLoading)
 
-	def _onClose(self):
-		self.poll_timer.stop()
-		self._loaded = True  # прерываем фоновый поток
-
 	def startLoading(self):
-		self._loaded = False
-		thread = threading.Thread(target=self._loadWorker)
-		thread.daemon = True
-		thread.start()
-		# 150 мс вместо 300 — заметно живее реакция при готовности данных
-		self.poll_timer.start(150, False)
+		self["status"].setText(u"Загрузка...".encode("utf-8"))
+		self.startAsync(self._loadWorker, self._onLoaded)
 
 	def _loadWorker(self):
-		try:
-			if self.mode == "search":
-				from .HdRezkaApi.search import HdRezkaSearch
-				searcher = HdRezkaSearch(HDREZKA_ORIGIN)
-				self.results = searcher(self.query, find_all=False)
-			else:
-				self.results = self._fetchCategoryPage(self.category)
-		except Exception as e:
-			self.error = str(e)
-		finally:
-			self._loaded = True
+		if self.mode == "search":
+			from .HdRezkaApi.search import HdRezkaSearch
+			searcher = HdRezkaSearch(get_origin())
+			return searcher(self.query, find_all=False)
+		elif self.mode == "favorites":
+			from .favorites import list_favorites
+			return list_favorites()
+		elif self.mode == "history":
+			from .history import list_history
+			return list_history()
+		else:
+			return self._fetchCategoryPage(self.category)
 
 	def _fetchCategoryPage(self, category_key):
 		# Общий пул сессий (keep-alive) + общий парсер вместо локальных.
 		from .HdRezkaApi.session_pool import get_session
 		from .HdRezkaApi.types import make_soup
 		path = CATEGORY_URLS.get(category_key, "/")
-		url  = HDREZKA_ORIGIN.rstrip("/") + path
+		url  = get_origin().rstrip("/") + path
 		r = get_session().get(url, timeout=20)
 		r.raise_for_status()
 		soup  = make_soup(r.content)
@@ -136,17 +123,26 @@ class HdRezkaResultsList(Screen):
 			})
 		return results
 
-	def checkLoaded(self):
-		if not self._loaded:
+	def _onLoaded(self, result, error):
+		if error:
+			# БАГФИКС: str(error) в py2 падал с UnicodeEncodeError на
+			# unicode-сообщениях с кириллицей.
+			msg = exc_text(error)
+			self["status"].setText(("Ошибка: %s" % msg))
+			log_exception("HdRezkaResultsList._loadWorker")
+			self.session.open(MessageBox, msg, MessageBox.TYPE_ERROR, timeout=8)
 			return
-		self.poll_timer.stop()
 
-		if self.error:
-			self["status"].setText(("Ошибка: %s" % self.error).encode("utf-8"))
-			return
+		self.results = result or []
 
 		if not self.results:
-			self["status"].setText(u"Ничего не найдено".encode("utf-8"))
+			if self.mode == "favorites":
+				empty_msg = u"Список избранного пуст"
+			elif self.mode == "history":
+				empty_msg = u"Вы ещё ничего не смотрели"
+			else:
+				empty_msg = u"Ничего не найдено"
+			self["status"].setText(empty_msg.encode("utf-8"))
 			return
 
 		self["status"].setText(("Найдено: %d" % len(self.results)).encode("utf-8"))

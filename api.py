@@ -53,7 +53,12 @@ class HdRezkaApi(object):
 		if proxy is None: proxy = {}
 		if headers is None: headers = {}
 		if cookies is None: cookies = {}
-		self.url = url.split(".html")[0] + ".html"
+		# БАГФИКС: раньше ".html" приклеивался безусловно — для URL без
+		# него (origin, категория) получался мусор вида "https://host.html".
+		if ".html" in url:
+			self.url = url.split(".html")[0] + ".html"
+		else:
+			self.url = url.rstrip("/")
 		uri = urlparse(url)
 		self.origin = "%s://%s" % (uri.scheme, uri.netloc)
 		self.proxy = proxy
@@ -70,6 +75,12 @@ class HdRezkaApi(object):
 
 		# Ленивый кэш переводов для seriesInfo
 		self._series_info_cache = {}
+
+		# Кэш исключения загрузки страницы. cached_property кэширует только
+		# успех, поэтому раньше цепочка `rezka.ok` -> `rezka.exception`
+		# делала ДВА полных сетевых запроса к мёртвому зеркалу — до 40 с
+		# ожидания вместо 20.
+		self._page_exc = None
 
 	def __str__(self): return 'HdRezka("%s")' % self.name
 	def __repr__(self): return str(self)
@@ -122,6 +133,13 @@ class HdRezkaApi(object):
 		data = response.json()
 		if data['success']:
 			self.cookies = dict(self.cookies, **response.cookies.get_dict())
+			# Синхронизируем и в общий пул: иначе поиск/категории, которые
+			# ходят через ту же сессию, но со своими cookies-словарями,
+			# оставались неавторизованными после логина.
+			try:
+				self.session.cookies.update(response.cookies)
+			except Exception:
+				pass
 			return True
 		if raise_exception: raise LoginFailed(data.get("message"))
 
@@ -132,16 +150,29 @@ class HdRezkaApi(object):
 
 	@cached_property
 	def page(self):
-		r = self._get(self.url, allow_redirects=True)
-		if r.ok: return r
-		raise HTTP(r.status_code, r.reason)
+		if self._page_exc is not None:
+			raise self._page_exc
+		try:
+			r = self._get(self.url, allow_redirects=True)
+			if r.ok: return r
+			raise HTTP(r.status_code, r.reason)
+		except Exception as e:
+			self._page_exc = e
+			raise
 
 	@cached_property
 	def soup(self):
-		s = BeautifulSoupCustom(self.page.content)
-		if s.title.text == "Sign In": raise LoginRequiredError()
-		if s.title.text == "Verify": raise CaptchaError()
-		return s
+		if self._page_exc is not None:
+			raise self._page_exc
+		try:
+			s = BeautifulSoupCustom(self.page.content)
+			title = s.title.text if s.title else ""
+			if title == "Sign In": raise LoginRequiredError()
+			if title == "Verify": raise CaptchaError()
+			return s
+		except Exception as e:
+			self._page_exc = e
+			raise
 
 	@cached_property
 	def id(self):
@@ -214,9 +245,11 @@ class HdRezkaApi(object):
 	def rating(self):
 		wraper = self.soup.find(class_='b-post__rating')
 		if wraper:
-			rating = wraper.find(class_='num').get_text()
-			votes = wraper.find(class_='votes').get_text().strip("()")
-			return HdRezkaRating(value=float(rating), votes=int(votes))
+			rating = wraper.find(class_='num').get_text().strip().replace(",", ".")
+			votes = wraper.find(class_='votes').get_text()
+			# Оставляем только цифры: в votes бывают скобки, пробелы, nbsp.
+			votes = re.sub(r'\D', '', votes)
+			return HdRezkaRating(value=float(rating), votes=int(votes or 0))
 		else:
 			return HdRezkaEmptyRating()
 
@@ -228,7 +261,7 @@ class HdRezkaApi(object):
 			for child in translators.findChildren(recursive=False):
 				id = int(child.attrs['data-translator_id'])
 				name = child.text.strip()
-				premium = 'b-prem_translator' in child['class']
+				premium = 'b-prem_translator' in child.attrs.get('class', [])
 				img = child.find('img')
 				if img:
 					lang = img.attrs.get('title')
@@ -458,6 +491,29 @@ class HdRezkaApi(object):
 
 		if self.type == TVSeries:
 			if season and episode:
+				# ── FAST PATH ────────────────────────────────────────────
+				# БАГФИКС (производительность): если перевод задан явно
+				# (обычный случай в UI плагина), раньше код всё равно шёл
+				# через self.episodesInfo -> seriesInfo, то есть делал по
+				# POST-запросу на КАЖДУЮ озвучку фильма (10-20 запросов у
+				# популярных сериалов) только ради валидации. Теперь
+				# валидируем по данным одного выбранного перевода — после
+				# экранов сезонов/эпизодов они уже в _series_info_cache,
+				# т.е. ноль дополнительных сетевых запросов.
+				if translation is not None and str(translation).isdigit():
+					tr_id = int(translation)
+					if tr_id not in self.translators:
+						raise ValueError('Translation with code "%s" is not defined' % translation)
+					data = self._fetch_translator_series(tr_id)
+					if not data:
+						raise FetchFailed()
+					eps = data["episodes"].get(int(season))
+					if eps is None:
+						raise ValueError('Season "%s" is not found!' % season)
+					if int(episode) not in eps:
+						raise ValueError('Episode "%s" in season "%s" is not found!' % (episode, season))
+					return getStreamSeries(self, int(season), int(episode), tr_id)
+				# ── SLOW PATH (translation по имени или не задан) ────────
 				episodes = next((s['episodes'] for s in self.episodesInfo if s['season'] == int(season)), None)
 				if not episodes:
 					raise ValueError('Season "%s" is not found!' % season)
@@ -525,25 +581,29 @@ class HdRezkaApi(object):
 		series_length = len(series)
 		progress(0, series_length)
 
-		def make_call(episode, retry=True):
-			try:
-				stream = self.getStream(season, episode, tr_id)
-				streams[episode] = stream
-				progress(len(streams), series_length)
-				return stream
-			except Exception as e:
-				if retry:
-					time.sleep(1)
-					if ignore:
-						return make_call(episode)
-					else:
-						return make_call(episode, retry=False)
-				if not ignore:
-					ex_name = e.__class__.__name__
-					ex_desc = e
-					print("%s > ep:%s: %s" % (ex_name, episode, ex_desc))
-					streams[episode] = None
+		# БАГФИКС: раньше при ignore=True была неограниченная РЕКУРСИЯ на
+		# постоянно падающем эпизоде (по кадру стека в секунду до
+		# RecursionError). Теперь цикл + разумный потолок попыток.
+		max_attempts = 5 if ignore else 2
+
+		def make_call(episode):
+			attempt = 0
+			while True:
+				attempt += 1
+				try:
+					stream = self.getStream(season, episode, tr_id)
+					streams[episode] = stream
 					progress(len(streams), series_length)
+					return stream
+				except Exception as e:
+					if attempt < max_attempts:
+						time.sleep(1)
+						continue
+					if not ignore:
+						print("%s > ep:%s: %s" % (e.__class__.__name__, episode, e))
+						streams[episode] = None
+						progress(len(streams), series_length)
+					return None
 
 		for episode in series:
 			yield episode, make_call(episode)

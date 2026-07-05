@@ -1,6 +1,6 @@
 # -*- coding: utf-8 -*-
 from Plugins.Plugin import PluginDescriptor
-from . import webserver
+from .log import log_exception
 
 
 def main(session, **kwargs):
@@ -8,35 +8,20 @@ def main(session, **kwargs):
 	session.open(HdRezkaMainMenu)
 
 
-def _play_on_receiver(play_url, title):
-	"""Вызывается из webserver.py, когда веб-клиент жмёт 'Смотреть'."""
-	from enigma import eServiceReference
-	from Screens.InfoBar import MoviePlayer
-	import NavigationInstance
-
-	session = NavigationInstance.instance and NavigationInstance.instance.session
-	if not session:
-		return
-
-	sref = eServiceReference(5002, 0, str(play_url))
-	sref.setName(title.encode("utf-8") if isinstance(title, unicode) else str(title))
-	session.open(MoviePlayer, sref)
-
-
-def autostart(reason, **kwargs):
-	if reason == 0:
-		webserver.start(_play_on_receiver)
-	elif reason == 1:
-		webserver.stop()
-
-
 def sessionstart(reason, **kwargs):
-	"""Открывает главное меню сразу после старта Enigma2."""
+	"""Автооткрытие меню при загрузке убрано (фикс этапа 1). Здесь
+	стартует HTTP-агент для Android-пульта: телефон парсит HDRezka сам
+	и шлёт сюда готовый URL потока + команды управления."""
 	if reason == 0:
-		session = kwargs.get("session")
-		if session:
-			from .MainMenu import HdRezkaMainMenu
-			session.open(HdRezkaMainMenu)
+		try:
+			session = kwargs.get("session")
+			if session:
+				from .agent import start_agent
+				start_agent(session)
+		except Exception:
+			# Падение здесь не должно утянуть автозапуск других плагинов
+			# в этом же проходе WHERE_SESSIONSTART.
+			log_exception("sessionstart")
 
 
 def Plugins(**kwargs):
@@ -53,11 +38,6 @@ def Plugins(**kwargs):
 			description="Онлайн-кинотеатр HDRezka",
 			where=PluginDescriptor.WHERE_EXTENSIONSMENU,
 			fnc=main,
-		),
-		PluginDescriptor(
-			name="HDRezka WebRemote",
-			where=PluginDescriptor.WHERE_AUTOSTART,
-			fnc=autostart,
 		),
 		PluginDescriptor(
 			name="HDRezka",

@@ -6,7 +6,7 @@ from Components.MenuList import MenuList
 from enigma import eListboxPythonMultiContent, gFont, RT_HALIGN_LEFT
 from Components.MultiContent import MultiContentEntryText
 
-from .config import HDREZKA_ORIGIN
+from .config import peek_origin
 
 
 def MenuEntryComponent(title):
@@ -30,9 +30,9 @@ class SimpleMenuList(MenuList):
 
 class HdRezkaMainMenu(Screen):
 	skin = """
-	<screen name="HdRezkaMainMenu" position="center,center" size="700,500" title="HDRezka">
+	<screen name="HdRezkaMainMenu" position="center,center" size="700,520" title="HDRezka">
 		<widget name="title" position="10,10" size="680,40" font="Regular;30" halign="center" />
-		<widget name="menu" position="10,60" size="680,420" scrollbarMode="showOnDemand" />
+		<widget name="menu" position="10,60" size="680,440" scrollbarMode="showOnDemand" />
 	</screen>
 	"""
 
@@ -40,14 +40,20 @@ class HdRezkaMainMenu(Screen):
 		Screen.__init__(self, session)
 		self.session = session
 
-		self["title"] = Label("HDRezka — %s" % HDREZKA_ORIGIN)
+		# peek_origin() не лезет в сеть -- безопасно дёргать прямо в GUI-потоке.
+		# Реальное (возможно другое, если зеркало недоступно) определение
+		# домена происходит лениво в фоновых потоках при первом запросе.
+		self["title"] = Label("HDRezka — %s" % peek_origin())
 
 		self.menu_items = [
 			("search",    u"Поиск по названию"),
+			("continue",  u"Продолжить просмотр"),
 			("films",     u"Фильмы"),
 			("series",    u"Сериалы"),
 			("cartoons",  u"Мультфильмы"),
 			("animation", u"Аниме"),
+			("favorites", u"Избранное"),
+			("settings",  u"Настройки"),
 		]
 
 		entries = [MenuEntryComponent(title) for (key, title) in self.menu_items]
@@ -60,7 +66,10 @@ class HdRezkaMainMenu(Screen):
 		}, -1)
 
 	def onCancel(self):
-		pass
+		# БАГФИКС: раньше тут был pass — Exit/Cancel не работал вообще,
+		# из плагина невозможно было выйти (особенно критично в связке
+		# с автозапуском меню при загрузке ресивера).
+		self.close()
 
 	def onSelect(self):
 		index = self["menu"].getSelectedIndex()
@@ -70,6 +79,12 @@ class HdRezkaMainMenu(Screen):
 
 		if key == "search":
 			self.openSearch()
+		elif key == "settings":
+			self.openSettings()
+		elif key == "favorites":
+			self.openFavorites()
+		elif key == "continue":
+			self.openHistory()
 		else:
 			self.openCategory(key, title)
 
@@ -81,6 +96,22 @@ class HdRezkaMainMenu(Screen):
 				self.openResultsList(query=text)
 
 		self.session.openWithCallback(callback, VirtualKeyBoard, title=u"Поиск на HDRezka", text="")
+
+	def openSettings(self):
+		from .config_screen import HdRezkaSetup
+		self.session.openWithCallback(self._onSettingsClosed, HdRezkaSetup)
+
+	def _onSettingsClosed(self, *args):
+		# Домен мог поменяться (принудительный или сброс кэша) -- обновим заголовок.
+		self["title"].setText("HDRezka — %s" % peek_origin())
+
+	def openFavorites(self):
+		from .ResultsList import HdRezkaResultsList
+		self.session.open(HdRezkaResultsList, mode="favorites", category=None, title=u"Избранное")
+
+	def openHistory(self):
+		from .ResultsList import HdRezkaResultsList
+		self.session.open(HdRezkaResultsList, mode="history", category=None, title=u"Продолжить просмотр")
 
 	def openCategory(self, category_key, title):
 		from .ResultsList import HdRezkaResultsList
