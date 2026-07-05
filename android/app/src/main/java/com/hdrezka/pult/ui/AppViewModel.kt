@@ -116,6 +116,14 @@ class AppViewModel(app: Application) : AndroidViewModel(app) {
         Mirrors.applyForced(domain)
     }
 
+    /** Подробная диагностика: реально ходит на каталог и показывает, что пришло. */
+    suspend fun diagnose(domain: String): String {
+        Mirrors.applyForced(domain)
+        val origin = Mirrors.resolve(forceRecheck = true)
+        val url = origin.trimEnd('/') + "/films/?filter=last"
+        return "origin: $origin\n" + com.hdrezka.pult.core.Net.getDebug(url)
+    }
+
     /** Проверка связи с HDRezka. Возвращает человекочитаемый результат. */
     suspend fun testConnection(domain: String): String {
         val d = domain.trim()

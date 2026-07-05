@@ -746,9 +746,23 @@ fun SettingsScreen(vm: AppViewModel) {
                     },
                 ) { Text("Проверить связь") }
             }
+            Spacer(Modifier.height(8.dp))
+            OutlinedButton(
+                enabled = !testing,
+                modifier = Modifier.fillMaxWidth(),
+                onClick = {
+                    scope.launch {
+                        testing = true
+                        testResult = "Диагностика…"
+                        testResult = runCatching { vm.diagnose(forcedDomain) }
+                            .getOrElse { "Ошибка: ${it.message}" }
+                        testing = false
+                    }
+                },
+            ) { Text("Диагностика (что отдаёт сайт)") }
             testResult?.let {
                 Spacer(Modifier.height(6.dp))
-                Text(it, color = MaterialTheme.colorScheme.primary)
+                Text(it, fontSize = 12.sp, color = MaterialTheme.colorScheme.primary)
             }
 
             Spacer(Modifier.height(20.dp))

@@ -101,6 +101,26 @@ object Net {
         }
     }
 
+    /** Диагностический GET: возвращает читаемый отчёт для показа в UI. */
+    suspend fun getDebug(url: String): String = withContext(Dispatchers.IO) {
+        try {
+            client.newCall(baseRequest(url).get().build()).execute().use { resp ->
+                val body = resp.body?.string() ?: ""
+                val doc = Jsoup.parse(body, url)
+                val items = doc.select(".b-content__inline_item").size
+                val head = body.take(200).replace("\n", " ").replace("\r", " ")
+                "URL: $url\n" +
+                    "HTTP: ${resp.code}\n" +
+                    "Размер тела: ${body.length}\n" +
+                    "title: ${doc.title()}\n" +
+                    "карточек (.b-content__inline_item): $items\n\n" +
+                    "Начало ответа:\n$head"
+            }
+        } catch (e: Exception) {
+            "URL: $url\nИСКЛЮЧЕНИЕ: ${e.javaClass.simpleName}: ${e.message}"
+        }
+    }
+
     /** GET → сырой HTML-текст. */
     suspend fun getText(url: String): String = withContext(Dispatchers.IO) {
         client.newCall(baseRequest(url).get().build()).execute().use { resp ->
